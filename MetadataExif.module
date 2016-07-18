@@ -1,0 +1,257 @@
+<?php namespace ProcessWire;
+
+/**
+*  Module: Metadata Exif
+*  Author: Horst Nogajski, http://nogajski.de/
+*
+*  ProcessWire 2.8+
+*
+*  Copyright (C) 2016 by Horst Nogajski
+*  This file licensed under Mozilla Public License v2.0 http://mozilla.org/MPL/2.0/
+*
+*  ChangeLog:
+*             0.9.0     initial release
+*
+*/
+class MetadataExif extends WireData implements Module {
+
+    protected $exif        = array();
+    protected $requested   = array();
+    protected $thumbnail   = false;
+    protected $toArray     = false;
+    protected $unformatted = false;
+    protected $raw         = false;
+
+
+    public static function getModuleInfo() {
+        return array(
+            'title'    => __('Image Metadata EXIF Read'),
+            'summary'  => __('Adds reading of EXIF metadata to the image object.'),
+            'version'  => '0.9.1',
+            'author'   => 'Horst Nogajski',
+            'autoload' => true,
+            'requires' => 'ProcessWire>=2.8.0, PHP>=5.3.8',
+            #'icon'     => '',
+        );
+    }
+
+    public function init() {
+        $this->addHook('Pageimage::getExif', $this, 'hookGetExif');
+    }
+
+    public function hookGetExif(HookEvent $event) {
+        $image   = $event->object;
+        $options = $event->arguments[0];
+        $event->return = $this->getExif($image, $options);
+    }
+
+
+
+    /**
+    * readExif($image, $options = null)
+    *
+    * @param mixed $image, image filename or Pageimage object
+    * @param mixed $options, associative array or simple indexed array only with key names
+    *              possible keys / values:
+    *
+    *              keys = array,
+    *                       a list with case insensitive keynames
+    *
+    *              thumbnail = bool,
+    *                       you can set thumbnail explicitly as own option,
+    *                       or you can add thumbnail as keyname to keys
+    *
+    *              toObject = bool,
+    *                       if is false or missing, an array or multidimensional array is returned
+    *
+    *              unformatted = bool,
+    *                       if explicitly set to true, you will get back unformatted (raw) values
+    *
+    *              returnRaw = bool,
+    *                       when no $options are set, or no $options['keys'] are set,
+    *                       or explicitly this param is set to true,
+    *                       the complete RAW EXIF data is returned
+    */
+    public function getExif($image, $options = null) {
+
+        // check if exif read is supported
+        if(!function_exists('exif_read_data')) return null;
+
+        // prepare and validate imagefilename
+        if($image instanceof Pageimage) {
+            $image = $image->filename;
+        }
+        if(!is_readable($image)) return null;
+
+        // prepare, sanitize and validate options
+        if(null === $options) {
+            $options = array();
+        }
+        if(!is_array($options)) return null;
+        if(count($options) > 0 && count(array_filter(array_keys($options), 'is_string')) == 0) {
+            // seems we only have a key name list
+            $options = array('keys' => $options);
+        }
+        $this->requested   = isset($options['keys']) && is_array($options['keys']) ? array_values($options['keys']) : array();
+        $this->toObject    = isset($options['toObject']) && true === $options['toObject'] ? true : false;
+        $this->toObject    = isset($options['toobject']) && true === $options['toobject'] ? true : $this->toObject;
+        $this->unformatted = isset($options['unformatted']) && true === $options['unformatted'] ? true : false;
+        $this->returnRaw   = count($options) == 0 || count($this->requested) == 0 || isset($options['returnRaw']) && true === $options['returnRaw'] ? true : false;
+        $this->returnRaw   = isset($options['returnraw']) && true === $options['returnraw'] ? true : $this->returnRaw;
+        $this->thumbnail   = isset($options['thumbnail']) && true === $options['thumbnail'] ? true : false;
+        $this->thumbnail   = isset($options['keys']) && (in_array('thumbnail', $options['keys']) || in_array('Thumbnail', $options['keys'])) ? true : $this->thumbnail;
+        if($this->thumbnail && !in_array('thumbnail', $this->requested) && !in_array('Thumbnail', $this->requested)) {
+            $this->requested[] = 'thumbnail';
+        }
+
+        // get EXIF data
+        $dump = @exif_read_data($image, NULL, true, $this->thumbnail);
+        if(false === $dump) return null;
+
+        // if we do not have those two, we have no info at all
+        if(!isset($dump['FILE']) || !isset($dump['COMPUTED'])
+              #|| !isset($dump['COMPUTED']['Width']) || !isset($dump['COMPUTED']['Height'])
+              #|| !isset($dump['FILE']['FileName']) || !isset($dump['FILE']['FileSize'])
+              #|| !isset($dump['FILE']['FileDateTime'])
+            ) {
+            return null;
+        }
+
+        // is RAW data requested?
+        if($this->returnRaw) {
+            #$raw = array();
+            #foreach($sections as $section) {
+            #    if(!isset($this->exif[$section])) continue;
+            #    $raw = array_merge($raw, $this->exif[$section]);
+            #}
+            #return $this->toObject ? $this->convertToObject($raw) : $raw;
+            return $this->toObject ? $this->convertToObject($dump) : $dump;
+        }
+
+        // sanitize key names to make usage less error prone
+        $this->exif = array();
+        $sections = array('FILE', 'COMPUTED', 'IFD0', 'EXIF', 'GPS', 'THUMBNAIL');
+        foreach($sections as $section) {
+            if(!isset($dump[$section])) continue;
+            $this->exif[$section] = array();
+            foreach($dump[$section] as $key => $value) {
+                $key = mb_strtolower($key);
+                $this->exif[$section][$key] = $value;
+            }
+        } unset($dump, $key, $value);
+
+        // collect data
+        $data = new \stdClass();
+
+        // prepare data according to requested keys
+        foreach($this->requested as $key) {
+            $keyTmp = mb_strtolower($key);
+            if('thumbnail' == $keyTmp) {
+                if(!isset($this->exif['THUMBNAIL']['thumbnail'])) continue;
+                #$data->$key = $this->exif['THUMBNAIL']['thumbnail'];
+                $data->$key = base64_encode($this->exif['THUMBNAIL']['thumbnail']);
+            } else {
+                foreach(array('COMPUTED', 'IFD0', 'EXIF', 'GPS', 'FILE') as $section) {
+                    if(!isset($this->exif[$section])) continue;
+                    if(isset($this->exif[$section][$keyTmp])) {
+                        $value = $this->exif[$section][$keyTmp];
+                        $method = $keyTmp . 'Formatted';
+                        if(!$this->unformatted && method_exists($this, $method)) {
+                            $value = $this->$method($value);
+                        }
+                        $data->$key = $value; // custom key may have mixed case chars, we don't want force users to lowercase only
+                        break;
+                    }
+                }
+            }
+        }
+
+        return $this->toObject ? $data : $this->convertToArray($data);
+    }
+
+
+
+    private function convertToObject($array) {
+        $object = new \stdClass();
+        foreach($array as $key => $value) {
+            if(is_array($value)) {
+                $value = $this->convertToObject($value);
+            }
+            $object->$key = $value;
+        }
+        return $object;
+    }
+
+    private function convertToArray($object) {
+        return json_decode(json_encode($object), true);
+    }
+
+
+
+    private function flashFormatted($value) {
+        $values = array(
+             0 => $this->_('Flash did not fire'),
+             1 => $this->_('Flash fired'),
+             5 => $this->_('Strobe return light not detected'),
+             7 => $this->_('Strobe return light detected'),
+             9 => $this->_('Flash fired, compulsory flash mode'),
+            13 => $this->_('Flash fired, compulsory flash mode, return light not detected'),
+            15 => $this->_('Flash fired, compulsory flash mode, return light detected'),
+            16 => $this->_('Flash did not fire, compulsory flash mode'),
+            24 => $this->_('Flash did not fire, auto mode'),
+            25 => $this->_('Flash fired, auto mode'),
+            29 => $this->_('Flash fired, auto mode, return light not detected'),
+            31 => $this->_('Flash fired, auto mode, return light detected'),
+            32 => $this->_('No flash function'),
+            65 => $this->_('Flash fired, red-eye reduction mode'),
+            69 => $this->_('Flash fired, red-eye reduction mode, return light not detected'),
+            71 => $this->_('Flash fired, red-eye reduction mode, return light detected'),
+            73 => $this->_('Flash fired, compulsory flash mode, red-eye reduction mode'),
+            77 => $this->_('Flash fired, compulsory flash mode, red-eye reduction mode, return light not detected'),
+            79 => $this->_('Flash fired, compulsory flash mode, red-eye reduction mode, return light detected'),
+            89 => $this->_('Flash fired, auto mode, red-eye reduction mode'),
+            93 => $this->_('Flash fired, auto mode, return light not detected, red-eye reduction mode'),
+            95 => $this->_('Flash fired, auto mode, return light detected, red-eye reduction mode')
+        );
+        return isset($values[$value]) ? $values[$value] : '';
+    }
+
+    private function whitebalanceFormatted($value) {
+        $values = array(
+             0 => $this->_('Auto'),
+             1 => $this->_('Daylight'),
+             2 => $this->_('Fluorescent'),
+             3 => $this->_('Incandescent'),
+             4 => $this->_('Flash'),
+             9 => $this->_('Fine Weather'),
+            10 => $this->_('Cloudy'),
+            11 => $this->_('Shade')
+        );
+        return isset($values[$value]) ? $values[$value] : '';
+    }
+
+    private function usercommentFormatted($value) { // THIS IS NOT FULLY TESTED YET!!
+        $exif = $this->exif;
+        if(isset($exif['COMPUTED']['usercomment'])) return $exif['COMPUTED']['usercomment'];
+        if(strpos($exif['EXIF']['usercomment'], null, 0) == strlen($exif['EXIF']['usercomment'])) {
+            return $exif['EXIF']['usercomment']; // no Binary-NULL-Chars in string
+        }
+        // check for encoding, strip out binary null and return the rest
+        $commentEncoding = substr($exif['EXIF']['usercomment'], 0, strpos($exif['EXIF']['usercomment'], null, 0));
+        $comment = str_replace(null, '', substr($exif['EXIF']['usercomment'], strpos($exif['EXIF']['usercomment'], null, 0)));
+        return $comment;
+    }
+
+    private function fnumberFormatted($value) {
+        if(isset($this->exif['COMPUTED']['aperturefnumber'])) {
+            $value = $this->exif['COMPUTED']['aperturefnumber'];
+        } else {
+            if(false !== mb_strpos($value, '/')) {
+                $i = explode('/', $value, 2);
+                $value = 'f/' . intval($i[0]) / intval($i[1]);
+            }
+        }
+        return $value;
+    }
+
+}
