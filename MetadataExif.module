@@ -4,13 +4,13 @@
 *  Module: Metadata Exif
 *  Author: Horst Nogajski, http://nogajski.de/
 *
-*  ProcessWire 2.8+
+*  ProcessWire 3.0+
 *
 *  Copyright (C) 2016 by Horst Nogajski
 *  This file licensed under Mozilla Public License v2.0 http://mozilla.org/MPL/2.0/
 *
 *  ChangeLog:
-*             0.9.0     initial release
+*             0.9.2     initial release
 *
 */
 class MetadataExif extends WireData implements Module {
@@ -27,10 +27,10 @@ class MetadataExif extends WireData implements Module {
         return array(
             'title'    => __('Image Metadata EXIF Read'),
             'summary'  => __('Adds reading of EXIF metadata to the image object.'),
-            'version'  => '0.9.1',
+            'version'  => '0.9.2',
             'author'   => 'Horst Nogajski',
             'autoload' => true,
-            'requires' => 'ProcessWire>=2.8.0, PHP>=5.3.8',
+            'requires' => 'ProcessWire>=3.0.0, PHP>=5.3.8',
             #'icon'     => '',
         );
     }
